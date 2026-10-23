@@ -1,0 +1,96 @@
+app:
+  window_title: "PANDU - Tekan Q untuk keluar"
+  # Pilih Logitech berdasarkan identitas, bukan asumsi indeks kamera.
+  # VID USB resmi perangkat Logitech adalah 046D.
+  camera_name: "Logitech"
+  camera_vendor_id: "046D"
+  # Jika false, aplikasi tidak diam-diam beralih ke integrated webcam.
+  allow_camera_fallback: false
+  # Dipakai saat --camera-index diberikan atau fallback diizinkan.
+  camera_index: "auto"
+  camera_scan_max_index: 5
+  prefer_external_camera: true
+  # DirectShow menjaga pasangan nama, indeks, dan backend tetap konsisten.
+  camera_backend: "dshow"
+  frame_width: 1280
+  frame_height: 720
+  show_fps: true
+
+model:
+  name: "yolo11n.pt"
+  confidence_threshold: 0.45
+  image_size: 640
+  device: null  # null = dipilih otomatis; contoh lain: "cpu", 0
+
+decision:
+  left_boundary: 0.33
+  right_boundary: 0.67
+  cooldown_seconds: 6.0
+  stability_frames: 3
+  center_bonus: 2.0
+  area_multiplier: 10.0
+  confidence_multiplier: 1.0
+
+speech:
+  enabled: true
+  # auto memakai Windows SAPI langsung di Windows dan pyttsx3 di platform lain.
+  backend: "auto"
+  rate: 175
+  volume: 1.0
+  queue_size: 3
+
+# Nama kelas di bawah mengikuti dataset COCO bawaan YOLO.
+# Angka yang lebih besar berarti lebih diprioritaskan untuk diumumkan.
+classes:
+  person: 8
+  bicycle: 9
+  car: 10
+  motorcycle: 10
+  bus: 10
+  truck: 10
+  chair: 6
+  bench: 6
+  backpack: 4
+  handbag: 4
+  suitcase: 5
+  umbrella: 5
+  bottle: 4
+  cup: 4
+  couch: 6
+  bed: 6
+  dining table: 6
+  potted plant: 5
+  laptop: 4
+  cell phone: 3
+  book: 3
+  dog: 7
+  cat: 5
+  traffic light: 7
+  stop sign: 8
+
+translations:
+  person: "orang"
+  bicycle: "sepeda"
+  car: "mobil"
+  motorcycle: "sepeda motor"
+  bus: "bus"
+  truck: "truk"
+  chair: "kursi"
+  bench: "bangku"
+  backpack: "tas ransel"
+  handbag: "tas tangan"
+  suitcase: "koper"
+  umbrella: "payung"
+  bottle: "botol"
+  cup: "gelas"
+  couch: "sofa"
+  bed: "tempat tidur"
+  dining table: "meja"
+  potted plant: "tanaman"
+  laptop: "laptop"
+  cell phone: "telepon genggam"
+  book: "buku"
+  dog: "anjing"
+  cat: "kucing"
+  traffic light: "lampu lalu lintas"
+  stop sign: "rambu berhenti"
