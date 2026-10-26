@@ -12,6 +12,7 @@ from .config import Config, load_config
 from .decision import DecisionEngine
 from .detector import YoloDetector
 from .speech import SpeechWorker
+from .stream import LatestFrameReader, droidcam_url, is_network_source
 from .visualizer import draw_frame
 
 
@@ -28,7 +29,15 @@ def build_parser() -> argparse.ArgumentParser:
         default=str(DEFAULT_CONFIG_PATH),
         help="Lokasi berkas konfigurasi YAML.",
     )
-    parser.add_argument("--source", help="Indeks kamera (mis. 0) atau path video.")
+    parser.add_argument(
+        "--source",
+        help="Indeks kamera (mis. 0), path video, atau URL stream (mis. http://IP:4747/video).",
+    )
+    parser.add_argument(
+        "--droidcam",
+        metavar="IP",
+        help="Pakai kamera HP lewat Wi-Fi dari aplikasi DroidCam, mis. --droidcam 192.168.1.5",
+    )
     parser.add_argument(
         "--camera-index",
         type=int,
@@ -88,18 +97,36 @@ def run(
             print(f"[ERROR] Webcam tidak ditemukan/dapat dibuka (pilihan: {requested}).")
             print("[SARAN] Jalankan: python main.py --list-cameras")
             print("[SARAN] Tutup Camera/Zoom/Teams, cabut-pasang webcam, lalu coba lagi.")
+            if "droid" in str(requested).lower():
+                print_droidcam_hints()
             return 3
         capture = opened_camera.capture
         print(
             f"[INFO] Webcam aktif: {opened_camera.name} | indeks {opened_camera.index} "
             f"| backend {opened_camera.backend}."
         )
+    elif is_network_source(source):
+        print(f"[INFO] Menghubungkan ke stream {source} ...")
+        raw_capture = cv2.VideoCapture(source)
+        if not raw_capture.isOpened():
+            print(f"[ERROR] Stream tidak dapat dibuka: {source}")
+            raw_capture.release()
+            print_droidcam_hints()
+            return 3
+        capture = LatestFrameReader(raw_capture)
+        print("[INFO] Stream aktif.")
     else:
         capture = cv2.VideoCapture(source)
         if not capture.isOpened():
             print(f"[ERROR] File video tidak dapat dibuka: {source}")
             capture.release()
             return 3
+
+    # Sumber langsung (webcam/stream) boleh sesekali gagal baca, misalnya saat
+    # sinyal Wi-Fi DroidCam tersendat. File video berhenti di frame gagal pertama.
+    is_live_source = is_camera_source or is_network_source(source)
+    max_consecutive_failures = 30 if is_live_source else 1
+    consecutive_failures = 0
 
     model_name = model_override or config.model.name
     print(f"[INFO] Memuat model {model_name}...")
@@ -133,9 +160,18 @@ def run(
     try:
         while True:
             ok, frame = capture.read()
-            if not ok:
-                print("[INFO] Frame berakhir atau tidak dapat dibaca.")
-                break
+            if not ok or frame is None:
+                consecutive_failures += 1
+                if consecutive_failures >= max_consecutive_failures:
+                    if is_live_source:
+                        print("[ERROR] Kamera/stream berhenti mengirim gambar.")
+                    else:
+                        print("[INFO] Frame berakhir atau tidak dapat dibaca.")
+                    break
+                if (cv2.waitKey(30) & 0xFF) in (ord("q"), 27):
+                    break
+                continue
+            consecutive_failures = 0
 
             detections = detector.detect(frame)
             height, width = frame.shape[:2]
@@ -177,6 +213,17 @@ def run(
         cv2.destroyAllWindows()
         speaker.stop()
     return 0
+
+
+def print_droidcam_hints() -> None:
+    print("[SARAN] Kamera HP via DroidCam:")
+    print("        1. Buka aplikasi DroidCam di HP; catat 'WiFi IP' dan port (biasanya 4747).")
+    print("        2. HP dan laptop harus di jaringan Wi-Fi yang sama.")
+    print("        3. Cara webcam virtual: buka DroidCam Client di laptop, klik Start/Connect,")
+    print('           lalu jalankan: python main.py --camera-name "DroidCam"')
+    print("        4. Cara langsung (tanpa driver): TUTUP DroidCam Client di laptop, lalu")
+    print("           jalankan: python main.py --droidcam IP_HP   (mis. 192.168.1.5)")
+    print("        Tes dulu di browser: http://IP_HP:4747/video harus menampilkan gambar.")
 
 
 def save_capture(frame: Any) -> Path:
@@ -225,7 +272,10 @@ def main(argv: list[str] | None = None) -> int:
             config.speech.enabled = False
         if args.list_cameras:
             return print_available_cameras(config)
-        source = parse_source(args.source, config.app.camera_index)
+        if args.droidcam:
+            source: int | str = droidcam_url(args.droidcam)
+        else:
+            source = parse_source(args.source, config.app.camera_index)
         return run(config, source, args.model, args.camera_index, args.camera_name)
     except (FileNotFoundError, ValueError, RuntimeError) as exc:
         print(f"[ERROR] {exc}")

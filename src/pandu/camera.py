@@ -4,9 +4,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import sys
+import time
 from typing import Any, Callable, Iterable
 
 from .config import AppConfig
+
+
+# Kamera virtual (DroidCam, OBS, dsb.) sering mengembalikan frame kosong
+# pada beberapa pembacaan pertama. Coba beberapa kali sebelum menyerah.
+WARMUP_READ_ATTEMPTS = 20
+WARMUP_READ_DELAY_SECONDS = 0.1
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,6 +93,22 @@ def _enumeration_backends(cv2: Any, requested: str) -> list[int]:
     return [cv2.CAP_DSHOW, cv2.CAP_MSMF]
 
 
+def _alternate_enumeration_backends(cv2: Any, requested: str) -> list[int]:
+    """Backend cadangan saat perangkat yang cocok gagal dibuka di backend utama.
+
+    Beberapa kamera virtual (misalnya DroidCam) terdaftar di DirectShow tetapi
+    hanya dapat dibuka melalui Media Foundation, atau sebaliknya.
+    """
+    if not sys.platform.startswith("win"):
+        return []
+    requested = requested.lower()
+    if requested == "dshow" and hasattr(cv2, "CAP_MSMF"):
+        return [cv2.CAP_MSMF]
+    if requested == "msmf" and hasattr(cv2, "CAP_DSHOW"):
+        return [cv2.CAP_DSHOW]
+    return []
+
+
 def _backend_name(cv2: Any, backend_code: int | None) -> str:
     if backend_code is None:
         return "default"
@@ -103,6 +126,7 @@ def enumerate_camera_devices(
     cv2: Any,
     config: AppConfig,
     enumerator: Callable[[int], Iterable[Any]] | None = None,
+    backends: list[int] | None = None,
 ) -> list[CameraInfo]:
     """Ambil nama dan identitas webcam dengan backend yang sesuai."""
     if enumerator is None:
@@ -112,9 +136,12 @@ def enumerate_camera_devices(
             return []
         enumerator = enumerate_cameras
 
+    if backends is None:
+        backends = _enumeration_backends(cv2, config.camera_backend)
+
     found: list[CameraInfo] = []
     seen: set[tuple[int, int | None, str]] = set()
-    for backend_code in _enumeration_backends(cv2, config.camera_backend):
+    for backend_code in backends:
         try:
             devices = enumerator(backend_code)
         except Exception as exc:
@@ -175,6 +202,22 @@ def _create_capture(cv2: Any, index: int, backend_code: int | None) -> Any:
     return cv2.VideoCapture(index, backend_code)
 
 
+def _read_first_frame(
+    capture: Any,
+    attempts: int = WARMUP_READ_ATTEMPTS,
+    delay_seconds: float = WARMUP_READ_DELAY_SECONDS,
+    sleep: Callable[[float], None] = time.sleep,
+) -> bool:
+    """Baca beberapa kali; kamera virtual sering butuh waktu sebelum frame pertama."""
+    for attempt in range(attempts):
+        ok, frame = capture.read()
+        if ok and frame is not None:
+            return True
+        if attempt < attempts - 1:
+            sleep(delay_seconds)
+    return False
+
+
 def _try_open_device(
     cv2: Any,
     config: AppConfig,
@@ -183,14 +226,45 @@ def _try_open_device(
     backend_name: str,
     name: str,
 ) -> OpenedCamera | None:
-    capture = _create_capture(cv2, index, backend_code)
-    if capture.isOpened():
-        capture.set(cv2.CAP_PROP_FRAME_WIDTH, config.frame_width)
-        capture.set(cv2.CAP_PROP_FRAME_HEIGHT, config.frame_height)
-        ok, frame = capture.read()
-        if ok and frame is not None:
+    # Percobaan pertama memakai resolusi dari config. Jika kamera terbuka tetapi
+    # tidak menghasilkan frame (umum pada DroidCam versi gratis yang hanya
+    # mendukung 640x480), buka ulang tanpa memaksa resolusi.
+    for force_resolution in (True, False):
+        capture = _create_capture(cv2, index, backend_code)
+        if not capture.isOpened():
+            capture.release()
+            return None
+        if force_resolution:
+            capture.set(cv2.CAP_PROP_FRAME_WIDTH, config.frame_width)
+            capture.set(cv2.CAP_PROP_FRAME_HEIGHT, config.frame_height)
+        if _read_first_frame(capture):
             return OpenedCamera(capture=capture, index=index, name=name, backend=backend_name)
-    capture.release()
+        capture.release()
+    return None
+
+
+def _open_matching_device(
+    cv2: Any,
+    config: AppConfig,
+    devices: Iterable[CameraInfo],
+    preferred_name: str | None,
+    preferred_vid: int | str | None,
+) -> OpenedCamera | None:
+    for device in matching_camera_devices(devices, preferred_name, preferred_vid):
+        opened = _try_open_device(
+            cv2,
+            config,
+            device.index,
+            device.backend_code,
+            device.backend,
+            device.name,
+        )
+        if opened is not None:
+            return opened
+        print(
+            f"[INFO] Gagal membuka \"{device.name}\" "
+            f"(backend {device.backend}, indeks {device.index})."
+        )
     return None
 
 
@@ -206,16 +280,16 @@ def open_camera(
         available = enumerate_camera_devices(cv2, config) if devices is None else devices
         preferred_name = name_override if name_override is not None else config.camera_name
         preferred_vid = None if name_override is not None else config.camera_vendor_id
-        matches = matching_camera_devices(available, preferred_name, preferred_vid)
-        for device in matches:
-            opened = _try_open_device(
-                cv2,
-                config,
-                device.index,
-                device.backend_code,
-                device.backend,
-                device.name,
-            )
+        opened = _open_matching_device(cv2, config, available, preferred_name, preferred_vid)
+        if opened is not None:
+            return opened
+
+        # Perangkat terdaftar tetapi gagal dibuka di backend utama: coba backend lain
+        # (mis. DroidCam yang gagal di DirectShow sering berhasil di Media Foundation).
+        alternate_backends = _alternate_enumeration_backends(cv2, config.camera_backend)
+        if devices is None and alternate_backends:
+            alternate = enumerate_camera_devices(cv2, config, backends=alternate_backends)
+            opened = _open_matching_device(cv2, config, alternate, preferred_name, preferred_vid)
             if opened is not None:
                 return opened
 
@@ -241,7 +315,11 @@ def open_camera(
 
 def scan_cameras(cv2: Any, config: AppConfig) -> list[CameraInfo]:
     """Daftar kamera bernama; fallback ke probing indeks pada platform lama."""
-    named_devices = enumerate_camera_devices(cv2, config)
+    backends = [
+        *_enumeration_backends(cv2, config.camera_backend),
+        *_alternate_enumeration_backends(cv2, config.camera_backend),
+    ]
+    named_devices = enumerate_camera_devices(cv2, config, backends=backends)
     if named_devices:
         return named_devices
 

@@ -121,6 +121,34 @@ File video:
 python main.py --source "D:\video-uji.mp4"
 ```
 
+### Kamera HP melalui DroidCam
+
+Pasang aplikasi **DroidCam** di HP. HP dan laptop harus berada di jaringan Wi-Fi yang sama. Buka aplikasi di HP dan catat **WiFi IP** serta port-nya (biasanya `4747`).
+
+**Cara A: langsung lewat Wi-Fi (disarankan, tanpa driver webcam virtual)**
+
+1. Tutup DroidCam Client di laptop. Aplikasi DroidCam di HP hanya melayani satu koneksi.
+2. Tes di browser: buka `http://IP_HP:4747/video`. Gambar kamera harus muncul.
+3. Jalankan:
+
+```powershell
+python main.py --droidcam 192.168.1.5
+```
+
+Port atau path lain juga bisa: `--droidcam 192.168.1.5:4747`, atau URL lengkap lewat `--source "http://192.168.1.5:4747/video"`.
+
+**Cara B: lewat webcam virtual DroidCam Client**
+
+1. Buka DroidCam Client di laptop, isi IP HP, lalu klik **Start/Connect** sampai gambar muncul.
+2. Jalankan:
+
+```powershell
+python main.py --list-cameras
+python main.py --camera-name "DroidCam"
+```
+
+Jika DroidCam gagal dibuka lewat DirectShow, aplikasi otomatis mencoba Media Foundation. Jika gagal pada resolusi HD, aplikasi membuka ulang kamera dengan resolusi bawaan perangkat.
+
 Model lain yang kompatibel dengan Ultralytics:
 
 ```powershell
