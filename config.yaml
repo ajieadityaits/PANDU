@@ -42,6 +42,7 @@ speech:
 # Nama kelas di bawah mengikuti dataset COCO bawaan YOLO.
 # Angka yang lebih besar berarti lebih diprioritaskan untuk diumumkan.
 classes:
+  person : 8
   bicycle: 9
   car: 10
   motorcycle: 10
